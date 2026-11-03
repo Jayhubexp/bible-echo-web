@@ -1,21 +1,48 @@
-import React,{useState} from 'react';
+import React,{useRef,useState} from 'react';
 import {asset,slides,ink,workspace} from './workspace';
 import {Field,MediaChoice} from './Library';
 import {Slide} from './projector';
+
+import hymns from './hymns.json';
+import {hymnEntry,searchSongs} from './songSearch';
+const starterHymns=hymns.map(hymnEntry);
 
 const emptySong=()=>({title:'',artist:'',language:'English',category:'Worship',theme:'',license:'',sections:[{label:'Verse 1',text:''}],arrangement:[0],background:null,favorite:false,archived:false,lines:3,size:5,font:'Georgia',align:'center',color:'#ffffff',margin:5});
 export function Songs({songs,media,refresh,act,project,queueSong,visible}){
   const [draft,set]=useState(emptySong),[row,setRow]=useState(),[q,search]=useState(''),[filter,setFilter]=useState('Active'),[index,page]=useState(0),[source,setSource]=useState(''),[rights,allow]=useState(false),[preview,setPreview]=useState(null);
   const [order,setOrder]=useState('1'),[presenting,live]=useState(false);
   const [arrName,setArrName]=useState(''),[theme,setTheme]=useState(''),[matches,setMatches]=useState(null);
+  const searchVersion=useRef(0);
+  const [finding,setFinding]=useState(false),[draftSource,setDraftSource]=useState('');
+  const availableHymns=starterHymns.filter(h=>!songs.some(s=>!s.body.archived&&s.body.license?.includes(h.source)));
+  function clearMatches(){searchVersion.current++;setMatches(null);setFinding(false);}
+  async function findByTheme(){
+    const version=++searchVersion.current;
+    search('');setFilter('Active');setFinding(true);setMatches(null);
+    const active=songs.filter(r=>!r.body.archived);
+    try{
+      const direct=searchSongs([...active,...availableHymns],theme);
+      if(direct.length || !active.length){
+        setMatches({songs:direct.map(r=>r.id),summary:direct.length?'Matches for “'+theme.trim()+'”.':'No match in the starter hymns. Add lyrics your team has permission to use.'});
+        return;
+      }
+      const result=await workspace('/assist','POST',{mode:'recommend',text:theme});
+      if(version===searchVersion.current)setMatches(result);
+    }finally{if(version===searchVersion.current)setFinding(false);}
+  }
   const [editing,setEditing]=useState(songs.length===0);
   const list=slides(draft),current=list[index];
   function edit(key,value){set({...draft,[key]:value});live(false);}
   function select(r,copy=false){
     const d=r?structuredClone(r.body):emptySong();
     if(copy){d.title+=' (copy)';d.archived=false;}
-    setEditing(!r||copy);set(d);setRow(copy?null:r);setOrder(d.arrangement.map(i=>i+1).join(', '));page(0);live(false);setPreview(null);setSource('');allow(!!r);
+    setDraftSource('');setEditing(!r||copy);set(d);setRow(copy?null:r);setOrder(d.arrangement.map(i=>i+1).join(', '));page(0);live(false);setPreview(null);setSource('');allow(!!r);
     if(d.background)act(async()=>setPreview(await asset(media.find(m=>m.id===d.background))));
+  }
+  function openHymn(hymn){
+    select(null);
+    const d={...emptySong(),...structuredClone(hymn.body)};
+    set(d);setOrder(d.arrangement.map(i=>i+1).join(', '));setDraftSource(hymn.source);
   }
   async function go(i,send){
     if(!list[i])return;
@@ -25,7 +52,7 @@ export function Songs({songs,media,refresh,act,project,queueSong,visible}){
   async function save(){
     if(!rights)throw Error('Confirm permission to store and present these lyrics.');
     const r=await workspace(row?'/songs/'+row.id+'?revision='+row.revision:'/songs',row?'PUT':'POST',draft);
-    setRow(r);await refresh();
+    setRow(r);if(draftSource){clearMatches();setDraftSource('');search('');setFilter('Active');}await refresh();
   }
   function setSection(i,key,value){
     edit('sections',draft.sections.map((s,n)=>n===i?{...s,[key]:value}:s));
@@ -45,9 +72,23 @@ export function Songs({songs,media,refresh,act,project,queueSong,visible}){
     setOrder(result.arrangement.map(i=>i+1).join(', '));page(0);live(false);setPreview(null);
   }
   if(!visible)return null;
-  const results=songs.filter(r=>!matches||matches.songs.includes(r.id)).filter(({body:s})=>(filter==='Archived'?s.archived:!s.archived)&&(filter!=='Favorites'||s.favorite)&&[s.title,s.artist,s.theme,s.language,...s.sections.map(x=>x.text)].join(' ').toLowerCase().includes(q.toLowerCase()));
-  return <section className="card songs"><small>WORSHIP COLLECTION</small><h2>Song library</h2><Field label="Find by title, artist, theme or lyrics" value={q} onChange={search}/><Field label="Collection" value={filter} options={['Active','Favorites','Archived']} onChange={setFilter}/>
-    <details><summary>Find songs by theme</summary><Field label="Service theme" value={theme} onChange={setTheme}/><button disabled={!theme.trim()} onClick={()=>act(async()=>setMatches(await workspace('/assist','POST',{mode:'recommend',text:theme})))}>Find matching songs</button>{matches&&<><p>{matches.summary}</p><button onClick={()=>setMatches(null)}>Show all songs</button></>}</details><div className="entries songEntries">{results.map(r=><button aria-pressed={row?.id===r.id} key={r.id} onClick={()=>select(r)}>{r.body.favorite?'★ ':''}<span>{r.body.title}<small>{r.body.artist||r.body.category} · {r.body.sections.length} sections</small></span></button>)}</div>{!results.length&&<p className="muted">No songs in this view. Create a song or try another search.</p>}<div className="row"><button onClick={()=>select(null)}>New song</button>{row&&<button aria-pressed={editing} onClick={()=>setEditing(!editing)}>{editing?'Hide editor':'Edit song'}</button>}</div>
+  const collection=songs.filter(({body:s})=>(filter==='Archived'?s.archived:!s.archived)&&(filter!=='Favorites'||s.favorite));
+  const eligible=rows=>matches?rows.filter(r=>matches.songs.includes(r.id)):rows;
+  const results=searchSongs(eligible(collection),q);
+  const catalog=filter==='Active'?searchSongs(eligible(availableHymns),q):[];
+  return <section className="card songs"><small>WORSHIP COLLECTION</small><h2>Song library</h2>
+  <Field label="Find by title, artist, theme or lyrics" value={q} onChange={v=>{clearMatches();search(v);}} placeholder="Amazing Grace or a line you remember"/>
+  <Field label="Collection" value={filter} options={['Active','Favorites','Archived']} onChange={v=>{clearMatches();setFilter(v);}}/>
+  <details><summary>Find songs by theme</summary><Field label="Service theme" value={theme} onChange={v=>{clearMatches();setTheme(v);}}/>
+  <button disabled={!theme.trim()||finding} onClick={()=>act(findByTheme)}>{finding?'Finding songs…':'Find matching songs'}</button>
+  {matches&&<><p>{matches.summary}</p><button onClick={clearMatches}>Show all songs</button></>}</details>
+  <h3>Saved songs</h3><div className="entries songEntries">{results.map(r=><button aria-pressed={row?.id===r.id} key={r.id} onClick={()=>select(r)}>{r.body.favorite?'★ ':''}<span>{r.body.title}<small>{r.body.artist||r.body.category} · {r.body.sections.length} sections</small></span></button>)}</div>
+  {!results.length&&<p className="muted">{songs.length?'No saved songs match this view.':'Your team’s saved songs will appear here.'}</p>}
+  {catalog.length>0&&<><h3>Public-domain starter hymns</h3><p className="muted">Choose a hymn to review its lyrics and save a copy to your library.</p>
+  <div className="entries songEntries">{catalog.map(h=><button key={h.id} onClick={()=>openHymn(h)}><span>{h.body.title}<small>{h.body.artist} · {h.body.sections.length} verses · Open draft</small></span></button>)}</div></>}
+  {!catalog.length&&!results.length&&filter==='Active'&&<p className="muted">For other songs, choose New song and import authorized lyrics in the lyrics preparation assistant. {(q.trim()||theme.trim())&&<a href={'https://hymnary.org/search?qu='+encodeURIComponent(q.trim()||theme.trim())} target="_blank" rel="noreferrer">Look up the hymn on Hymnary</a>}</p>}
+  <div className="row"><button onClick={()=>select(null)}>New song</button>{row&&<button aria-pressed={editing} onClick={()=>setEditing(!editing)}>{editing?'Hide editor':'Edit song'}</button>}</div>
+  {draftSource&&<p className="muted">Draft from a public-domain hymn · <a href={draftSource} target="_blank" rel="noreferrer">View source edition</a></p>}
   <div className="songStage"><small>SLIDE PREPARATION</small>  <h3>{draft.title||'Slide preview'}</h3><div className="monitor"><Slide slide={{...preview,...ink(current)}}/></div><div className="row"><button disabled={!current} onClick={()=>act(()=>go(index,false))}>Preview background</button><button className="primary" disabled={!current||!rights} onClick={()=>act(()=>go(index,true))}>Project song</button><button disabled={!index} onClick={()=>act(()=>go(index-1,presenting))}>Previous slide</button><button disabled={index+1>=list.length} onClick={()=>act(()=>go(index+1,presenting))}>Next slide</button><button onClick={()=>project({caption:null,verse:null,clear:false})}>Clear text</button><button onClick={()=>project({clear:true})}>Blackout</button></div>
   <Field label="Jump to song slide" value={index} options={list.map((s,i)=>[i,(i+1)+' · '+s.label])} onChange={v=>act(()=>go(Number(v),presenting))}/><button disabled={!row||row.body.archived} onClick={()=>queueSong(row)}>Load saved song into service queue</button></div>
   <div hidden={!editing}><fieldset className="metadataGrid"><legend>Song details</legend>{['title','artist','language','theme','license'].map(k=><Field key={k} label={k==='license'?'Copyright, attribution or license':k} value={draft[k]} onChange={v=>edit(k,v)}/>)}<Field label="Category" options={['Hymn','Worship','Praise','Gospel','Special Ministration','Other']} value={draft.category} onChange={v=>edit('category',v)}/>

@@ -33,6 +33,6 @@ feed(44000,0.1);feed(4000,0);
 assert.equal(packets.length,1);
 feed(88000,0.1);capture.port.onmessage();
 assert.equal(packets.at(-1),null);
-assert.equal(packets[1].length,80000);
+assert.equal(packets[1].length,48000);
 assert.equal(packets.slice(0,-1).reduce((n,p)=>n+p.length,0),136000);
-console.log('PASS pause-aware capture, five-second cap and lossless final flush');
+console.log('PASS pause-aware capture, three-second cap and lossless final flush');

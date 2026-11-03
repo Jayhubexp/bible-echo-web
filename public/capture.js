@@ -1,7 +1,7 @@
 class SermonCapture extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.buffer = new Float32Array(sampleRate * 5);
+    this.buffer = new Float32Array(sampleRate * 3);
     this.used = 0;
     this.heardSpeech = false;
     this.quietSamples = 0;
@@ -34,8 +34,8 @@ class SermonCapture extends AudioWorkletProcessor {
       else { this.heardSpeech = true; this.quietSamples = 0; }
       if (this.used === this.buffer.length) this.flush();
     }
-    // Keep every sample, but prefer a short pause over cutting a word at five seconds.
-    if (this.heardSpeech && this.used >= sampleRate * 2.5 && this.quietSamples >= sampleRate * 0.22) this.flush();
+    // Keep every sample, but prefer a short pause over cutting a word at three seconds.
+    if (this.heardSpeech && this.used >= sampleRate * 2.1 && this.quietSamples >= sampleRate * 0.18) this.flush();
     return true;
   }
 }

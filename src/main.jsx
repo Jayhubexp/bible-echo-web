@@ -24,6 +24,7 @@ function Desk(){
   const [auto,setAuto]=useState(true),autoRef=useRef(true),stopRef=useRef(),session=useRef(0);
   const [query,setQuery]=useState(''),[searching,setSearching]=useState(false);
   const [passage,setPassage]=useState(null),[index,setIndex]=useState(0);
+  const [referenceHint,setReferenceHint]=useState('');
   const projectedPassage=useRef(null);
   const [slide,setSlide]=useState(initialSlide),live=useRef(slide),bus=useRef(),desk=useRef(null);
   if(!desk.current)desk.current=deskId();
@@ -91,21 +92,24 @@ function Desk(){
     const id=++session.current;
     try{
       stopRef.current=await listen(async blob=>{
-        const {transcript:text}=await api('/transcribe',{method:'POST',body:blob});
+        const context=previous;
+        const response=await api('/transcribe?'+new URLSearchParams({detect:'true',preceding:context}),{method:'POST',body:blob});
+        const text=response.transcript;
         if(!text.trim() || session.current!==id)return;
         setTranscript(lines=>[...lines.slice(-199),text]);
-        const context=previous;
         previous=(previous+' '+text).trim().split(/\s+/).slice(-24).join(' ').slice(-300);
-        const {passages}=await api('/scripture/search?spoken=true&'+new URLSearchParams({q:text.slice(-2000),preceding:context}));
+        const {passages,unresolved=[]}=response.passages ? response : await api('/scripture/search?spoken=true&'+new URLSearchParams({q:text.slice(-2000),preceding:context}));
         if(session.current!==id)return;
+        if(unresolved.length){setReferenceHint(unresolved.join(' '));lastRef='';}
+        else if(passages.length)setReferenceHint('');
         for(const p of passages){
-          if(lastRef===p.reference)continue;
+          if(lastRef===p.reference && live.current.verse?.id===p.verses[0].id && !live.current.clear)continue;
           lastRef=p.reference;
           setHistory(list=>[p,...list.filter(item=>item.reference!==p.reference)].slice(0,30));
           select(p);
           if(autoRef.current && !override.current?.active()) projectVerse(p,0);
         }
-        if(!passages.length && autoRef.current && !override.current?.active()){
+        if(!passages.length && !unresolved.length && autoRef.current && !override.current?.active()){
           const p=projectedPassage.current;
           const next=spokenVerseIndex(text,p,live.current,context);
           if(next>=0)projectVerse(p,next);
@@ -178,7 +182,7 @@ function Desk(){
     <p className="muted">{mic==='Listening'?'Listening for scripture references.':'Follow the sermon and cue scripture by voice.'}</p><div className="listenControls"><button className="primary" disabled={!['Off','Listening'].includes(mic)} onClick={toggleMic}><Icon name="mic" size={16}/>{mic==='Off'?'Start listening':mic==='Listening'?'Stop listening':mic+'…'}</button><span className={'wave '+(mic==='Listening'?'recording':'')} aria-hidden="true">{[8,15,10,22,14,28,17,10,19,9].map((h,i)=><i key={i} style={{height:h}}/>)}</span></div>
     <label className="toggle"><input type="checkbox" checked={auto} onChange={e=>{autoRef.current=e.target.checked;setAuto(e.target.checked);}}/> Automatically project detected citations</label></section>
     <section className="card"><div className="panelHead"><span className="iconTitle"><Icon name="text"/><h2>Live transcript</h2></span></div><div className="transcript" aria-live="polite">{transcript.length?transcript.map((t,i)=><p key={i}>{t}</p>):'Live transcript will appear here when listening begins.'}</div></section>
-    <section className="card"><div className="panelHead"><span className="iconTitle"><Icon name="book"/><h2>Detected references</h2></span><span className="badge">{history.length}</span></div>{history.length?<div className="row">{history.map(p=><button key={p.reference} onClick={()=>{select(p);setPreview(true);}}>{p.reference}</button>)}</div>:<p className="muted">Scripture references will appear as they are spoken.</p>}</section></div></div>{scripture}</>}
+    <section className="card"><div className="panelHead"><span className="iconTitle"><Icon name="book"/><h2>Detected references</h2></span><span className="badge">{history.length}</span></div>{referenceHint&&<p role="status">{referenceHint}</p>}{history.length?<div className="row">{history.map(p=><button key={p.reference} onClick={()=>{select(p);setPreview(true);}}>{p.reference}</button>)}</div>:!referenceHint&&<p className="muted">Scripture references will appear as they are spoken.</p>}</section></div></div>{scripture}</>}
     {tab==='Scripture'&&<>{scripture}{monitor}</>}
     {tab==='Backgrounds'&&<>{background}{monitor}</>}
     {!unlocked&&(libraryTool||tab==='Backgrounds')&&<section className="card access"><span className="iconBox"><Icon name="lock"/></span><small>SHARED LIBRARY</small><h2>Open your team workspace</h2><p className="muted">Use your team passphrase to access saved songs, media and service plans.</p><form onSubmit={e=>{e.preventDefault();sessionStorage.setItem('echo-key',key);act(refresh,'Shared workspace opened.');}}><Field label="Shared operator passphrase" type="password" value={key} onChange={setKey}/><button className="primary">Unlock shared library</button></form></section>}

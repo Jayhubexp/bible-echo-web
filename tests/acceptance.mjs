@@ -37,23 +37,30 @@ try{
     await screen.evaluate(()=>document.exitFullscreen());
   });
   if(process.env.TEST_SPOKEN_NAV==='1')await check('spoken range, verse jump, next and terminal boundary in audience window',async()=>{
-    const phrases=['Luke chapter eighteen from verse one to verse seven.','Verse two.','Next.','Verse seven.','Next.'];
+    const phrases=['Romans chapter ten verse thirty.','Luke chapter eighteen from verse one to verse seven.','Verse two.','Next.','Verse seven.','Next.'];
     let received=0;
-    await page.route('**/transcribe',route=>route.fulfill({
-      headers:{'access-control-allow-origin':'*'},json:{transcript:phrases[received++]||''}
-    }));
+    await page.route('**/transcribe?*',async route=>{
+      const transcript=phrases[received++]||'';
+      const {origin,searchParams}=new URL(route.request().url());
+      const query=new URLSearchParams({spoken:'true',q:transcript,preceding:searchParams.get('preceding')||''});
+      const matches=transcript?await (await page.request.get(origin+'/api/v1/scripture/search?'+query)).json():{passages:[],unresolved:[]};
+      await route.fulfill({headers:{'access-control-allow-origin':'*'},json:{transcript,...matches}});
+    });
     try{
+      const before=await screen.locator('article b').innerText();
       await page.getByRole('button',{name:'Start listening'}).click();
+      await page.getByText(/Heard Romans 10:30.*1–21/).waitFor({timeout:20000});
+      assert.equal(await screen.locator('article b').innerText(),before);
       for(const n of [1,2,3,7])await screen.getByText('Luke 18:'+n+' · KJV',{exact:true}).waitFor({timeout:20000});
       await page.waitForFunction(()=>[...document.querySelectorAll('.transcript p')].filter(p=>p.textContent==='Next.').length===2);
       await page.getByRole('button',{name:'Stop listening'}).click();
       await page.getByRole('button',{name:'Start listening'}).waitFor();
       assert.equal(await screen.locator('article b').innerText(),'Luke 18:7 · KJV');
-    }catch(e){console.error('Voice fixture chunks',received,'desk alerts',await page.getByRole('alert').allTextContents(),'audience',await screen.locator('article b').allTextContents());throw e;}finally{await page.unroute('**/transcribe');}
+    }catch(e){console.error('Voice fixture chunks',received,'desk alerts',await page.getByRole('alert').allTextContents(),'audience',await screen.locator('article b').allTextContents());throw e;}finally{await page.unroute('**/transcribe?*');}
   });
   if(process.env.TEST_WAV)await check('HTTPS microphone capture, real Muse transcription and automatic projection',async()=>{
     assert(await page.evaluate(()=>isSecureContext));
-    const response=page.waitForResponse(r=>r.url().endsWith('/transcribe'));
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/transcribe'));
     await page.getByRole('button',{name:'Start listening'}).click();
     await page.getByRole('button',{name:'Stop listening'}).waitFor({timeout:15000});
     await page.waitForTimeout(4250);
